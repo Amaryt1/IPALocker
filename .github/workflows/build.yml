@@ -7,17 +7,14 @@ on:
 
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: macos-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Theos & SDKs
-        run: |
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          git clone https://github.com/theos/sdks.git $HOME/theos/sdks
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+        uses: Randomblock1/theos-action@v1
 
       - name: Build Dylib
         run: |
@@ -29,6 +26,6 @@ jobs:
         with:
           name: IPALocker-Dylib
           path: |
-            .theos/obj/FINALPACKAGE/*.dylib
             .theos/obj/*.dylib
+            .theos/obj/FINALPACKAGE/*.dylib
             packages/*.deb
