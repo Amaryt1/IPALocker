@@ -1,0 +1,10 @@
+Package: com.ipastore.ipalocker
+Name: IPALocker
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: App Lock Tweak with online key verification
+Maintainer: IPA Store
+Author: IPA Store
+Section: Tweaks
+
