@@ -86,6 +86,8 @@
                                                             cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
                                                         timeoutInterval:10.0];
     [request setHTTPMethod:@"GET"];
+    [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" forHTTPHeaderField:@"User-Agent"];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -107,36 +109,27 @@
             BOOL isValidKey = NO;
             NSInteger durationDays = 30;
             
-            if ([jsonObject isKindOfClass:[NSArray class]]) {
-                for (id item in (NSArray *)jsonObject) {
-                    if ([item isKindOfClass:[NSDictionary class]]) {
-                        NSString *k = item[@"code"] ?: item[@"key"] ?: item[@"passcode"];
-                        if (k && [k isEqualToString:code]) {
-                            isValidKey = YES;
-                            NSString *type = [item[@"type"] lowercaseString];
-                            NSInteger customDays = [item[@"days"] integerValue];
-                            
-                            if (customDays > 0) {
-                                durationDays = customDays;
-                            } else if ([type isEqualToString:@"daily"] || [type isEqualToString:@"day"]) {
-                                durationDays = 1;
-                            } else if ([type isEqualToString:@"weekly"] || [type isEqualToString:@"week"]) {
-                                durationDays = 7;
-                            } else if ([type isEqualToString:@"monthly"] || [type isEqualToString:@"month"]) {
-                                durationDays = 30;
-                            } else if ([type isEqualToString:@"lifetime"]) {
-                                durationDays = 3650;
-                            }
-                            break;
-                        }
-                    } else if ([item isKindOfClass:[NSString class]] && [item isEqualToString:code]) {
-                        isValidKey = YES;
-                        break;
-                    }
-                }
-            } else if ([jsonObject isKindOfClass:[NSDictionary class]]) {
+            if ([jsonObject isKindOfClass:[NSDictionary class]]) {
                 NSDictionary *dict = (NSDictionary *)jsonObject;
-                if (dict[code] != nil) {
+                
+                // قراءة القوائم سواء كانت valid_keys أو keys
+                NSArray *keysArray = dict[@"valid_keys"] ?: dict[@"keys"];
+                if (keysArray && [keysArray isKindOfClass:[NSArray class]]) {
+                    for (id item in keysArray) {
+                        if ([item isKindOfClass:[NSString class]] && [item isEqualToString:code]) {
+                            isValidKey = YES;
+                            break;
+                        } else if ([item isKindOfClass:[NSDictionary class]]) {
+                            NSString *k = item[@"code"] ?: item[@"key"] ?: item[@"passcode"];
+                            if (k && [k isEqualToString:code]) {
+                                isValidKey = YES;
+                                NSInteger customDays = [item[@"days"] integerValue];
+                                if (customDays > 0) durationDays = customDays;
+                                break;
+                            }
+                        }
+                    }
+                } else if (dict[code] != nil) {
                     isValidKey = YES;
                     id val = dict[code];
                     if ([val isKindOfClass:[NSDictionary class]]) {
@@ -145,6 +138,13 @@
                         else if ([type isEqualToString:@"weekly"]) durationDays = 7;
                         else if ([type isEqualToString:@"monthly"]) durationDays = 30;
                         else if (val[@"days"]) durationDays = [val[@"days"] integerValue];
+                    }
+                }
+            } else if ([jsonObject isKindOfClass:[NSArray class]]) {
+                for (id item in (NSArray *)jsonObject) {
+                    if ([item isKindOfClass:[NSString class]] && [item isEqualToString:code]) {
+                        isValidKey = YES;
+                        break;
                     }
                 }
             }
@@ -199,4 +199,3 @@ static void __attribute__((constructor)) initializeAppLock(void) {
         }
     }];
 }
-
