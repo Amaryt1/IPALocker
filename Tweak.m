@@ -42,10 +42,11 @@
     titleLabel.font = [UIFont boldSystemFontOfSize:22];
     [self.view addSubview:titleLabel];
     
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 210, self.view.bounds.size.width - 40, 30)];
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 210, self.view.bounds.size.width - 40, 40)];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     self.statusLabel.textColor = [UIColor systemRedColor];
-    self.statusLabel.font = [UIFont systemFontOfSize:14];
+    self.statusLabel.font = [UIFont systemFontOfSize:13];
+    self.statusLabel.numberOfLines = 2;
     [self.view addSubview:self.statusLabel];
     
     self.passcodeTextField = [[UITextField alloc] initWithFrame:CGRectMake(40, 260, self.view.bounds.size.width - 80, 50)];
@@ -53,6 +54,7 @@
     self.passcodeTextField.borderStyle = UITextBorderStyleRoundedRect;
     self.passcodeTextField.secureTextEntry = YES;
     self.passcodeTextField.textAlignment = NSTextAlignmentCenter;
+    self.passcodeTextField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
     [self.view addSubview:self.passcodeTextField];
     
     self.submitButton = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -87,7 +89,7 @@
                                                         timeoutInterval:10.0];
     [request setHTTPMethod:@"GET"];
     [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" forHTTPHeaderField:@"User-Agent"];
-    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"application/json, text/plain, */*" forHTTPHeaderField:@"Accept"];
     
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -95,14 +97,25 @@
             self.submitButton.enabled = YES;
             
             if (error || !data) {
-                self.statusLabel.text = @"تعذر الاتصال بقائمة المفاتيح";
+                self.statusLabel.text = [NSString stringWithFormat:@"خطأ اتصال: %@", error.localizedDescription ?: @"لا توجد بيانات"];
+                return;
+            }
+            
+            NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+            if (httpResponse.statusCode != 200) {
+                self.statusLabel.text = [NSString stringWithFormat:@"السيرفر أرجع كود: %ld (حظر أو خطأ)", (long)httpResponse.statusCode];
                 return;
             }
             
             NSError *jsonError;
             id jsonObject = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
-            if (jsonError) {
-                self.statusLabel.text = @"خطأ في قراءة ملف المفاتيح من السيرفر";
+            if (jsonError || !jsonObject) {
+                NSString *rawData = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                if ([rawData hasPrefix:@"<"]) {
+                    self.statusLabel.text = @"حظر Cloudflare: السيرفر أرجع صفحة HTML بدلاً من JSON";
+                } else {
+                    self.statusLabel.text = @"صيغة الـ JSON غير صالحة من السيرفر";
+                }
                 return;
             }
             
@@ -111,17 +124,17 @@
             
             if ([jsonObject isKindOfClass:[NSDictionary class]]) {
                 NSDictionary *dict = (NSDictionary *)jsonObject;
-                
-                // قراءة القوائم سواء كانت valid_keys أو keys
                 NSArray *keysArray = dict[@"valid_keys"] ?: dict[@"keys"];
                 if (keysArray && [keysArray isKindOfClass:[NSArray class]]) {
                     for (id item in keysArray) {
-                        if ([item isKindOfClass:[NSString class]] && [item isEqualToString:code]) {
-                            isValidKey = YES;
-                            break;
+                        if ([item isKindOfClass:[NSString class]]) {
+                            if ([item compare:code options:NSCaseInsensitiveSearch] == NSOrderedSame) {
+                                isValidKey = YES;
+                                break;
+                            }
                         } else if ([item isKindOfClass:[NSDictionary class]]) {
                             NSString *k = item[@"code"] ?: item[@"key"] ?: item[@"passcode"];
-                            if (k && [k isEqualToString:code]) {
+                            if (k && [k compare:code options:NSCaseInsensitiveSearch] == NSOrderedSame) {
                                 isValidKey = YES;
                                 NSInteger customDays = [item[@"days"] integerValue];
                                 if (customDays > 0) durationDays = customDays;
@@ -131,18 +144,10 @@
                     }
                 } else if (dict[code] != nil) {
                     isValidKey = YES;
-                    id val = dict[code];
-                    if ([val isKindOfClass:[NSDictionary class]]) {
-                        NSString *type = [val[@"type"] lowercaseString];
-                        if ([type isEqualToString:@"daily"]) durationDays = 1;
-                        else if ([type isEqualToString:@"weekly"]) durationDays = 7;
-                        else if ([type isEqualToString:@"monthly"]) durationDays = 30;
-                        else if (val[@"days"]) durationDays = [val[@"days"] integerValue];
-                    }
                 }
             } else if ([jsonObject isKindOfClass:[NSArray class]]) {
                 for (id item in (NSArray *)jsonObject) {
-                    if ([item isKindOfClass:[NSString class]] && [item isEqualToString:code]) {
+                    if ([item isKindOfClass:[NSString class]] && [item compare:code options:NSCaseInsensitiveSearch] == NSOrderedSame) {
                         isValidKey = YES;
                         break;
                     }
@@ -157,7 +162,7 @@
                 
                 [self dismissViewControllerAnimated:YES completion:nil];
             } else {
-                self.statusLabel.text = @"الكود غير صحيح أو منتهي الصلاحية";
+                self.statusLabel.text = @"الكود غير صحيح أو غير موجود باللوحة";
             }
         });
     }];
