@@ -7,14 +7,19 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Theos & SDKs
-        uses: Randomblock1/theos-action@v1
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          git clone https://github.com/theos/sdks.git $HOME/theos/sdks
+          cd $HOME/theos/sdks
+          for f in *.tar.xz; do tar -xf "$f" && rm "$f"; done
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
 
       - name: Build Dylib
         run: |
