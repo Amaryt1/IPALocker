@@ -1,6 +1,71 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
+#import <dlfcn.h>
+#import <sys/types.h>
+
+// --- دالة التشفير وفك التشفير الديناميكية للنصوص ---
+static inline NSString *secStr(const unsigned char *data, size_t len, unsigned char key) {
+    char *outData = (char *)malloc(len + 1);
+    if (!outData) return @"";
+    for (size_t i = 0; i < len; i++) {
+        outData[i] = data[i] ^ key;
+    }
+    outData[len] = '\0';
+    NSString *result = [NSString stringWithUTF8String:outData];
+    free(outData);
+    return result ? result : @"";
+}
+
+// مفاتيح الحفظ في NSUserDefaults مشفرة
+static inline NSString *getKeyTimestamp(void) {
+    const unsigned char b[] = {0x0B, 0x3A, 0x3A, 0x0B, 0x29, 0x3E, 0x23, 0x3C, 0x2B, 0x3E, 0x23, 0x25, 0x24, 0x1E, 0x23, 0x27, 0x2F, 0x39, 0x3E, 0x2B, 0x27, 0x3A};
+    return secStr(b, sizeof(b), 0x4A);
+}
+
+static inline NSString *getKeyDuration(void) {
+    const unsigned char b[] = {0x0B, 0x3A, 0x3A, 0x0B, 0x29, 0x3E, 0x23, 0x3C, 0x2B, 0x3E, 0x23, 0x25, 0x24, 0x0E, 0x3F, 0x38, 0x2B, 0x3E, 0x23, 0x25, 0x24, 0x0E, 0x2B, 0x33, 0x39};
+    return secStr(b, sizeof(b), 0x4A);
+}
+
+static inline NSString *getKeyActivatedCode(void) {
+    const unsigned char b[] = {0x0B, 0x3A, 0x3A, 0x0B, 0x29, 0x3E, 0x23, 0x3C, 0x2B, 0x3E, 0x23, 0x25, 0x24, 0x09, 0x2F, 0x2E, 0x21, 0x25, 0x2E, 0x21};
+    return secStr(b, sizeof(b), 0x4A);
+}
+
+// رابط سيرفر المفاتيح مشفر
+static inline NSString *getApiUrl(void) {
+    const unsigned char b[] = {
+        0x22, 0x3E, 0x3E, 0x3A, 0x39, 0x70, 0x65, 0x65, 0x38, 0x2B, 0x3D, 0x64, 0x2D, 0x23, 0x3E, 0x22,
+        0x3F, 0x28, 0x3F, 0x39, 0x2F, 0x38, 0x29, 0x25, 0x24, 0x3E, 0x2F, 0x24, 0x3E, 0x64, 0x29, 0x25,
+        0x27, 0x65, 0x0B, 0x27, 0x2B, 0x38, 0x33, 0x3E, 0x7B, 0x65, 0x0B, 0x65, 0x38, 0x2F, 0x2C, 0x39,
+        0x65, 0x22, 0x2F, 0x2B, 0x2E, 0x39, 0x65, 0x27, 0x2B, 0x23, 0x24, 0x65, 0x3A, 0x3F, 0x28, 0x26,
+        0x23, 0x29, 0x65, 0x21, 0x2F, 0x33, 0x39, 0x64, 0x20, 0x39, 0x25, 0x24
+    };
+    return secStr(b, sizeof(b), 0x4A);
+}
+
+// رابط التليجرام مشفر
+static inline NSString *getTelegramUrl(void) {
+    const unsigned char b[] = {
+        0x22, 0x3E, 0x3E, 0x3A, 0x39, 0x70, 0x65, 0x65, 0x3E, 0x2F, 0x26, 0x2F, 0x2D, 0x38, 0x2B, 0x27,
+        0x64, 0x27, 0x2F, 0x65, 0x06, 0x06, 0x13, 0x0E, 0x06
+    };
+    return secStr(b, sizeof(b), 0x4A);
+}
+
+// حماية ضد التصحيح والتتبع Dynamic Anti-Debugging
+typedef int (*ptrace_ptr_t)(int _request, pid_t _pid, caddr_t _addr, int _data);
+static void applyAntiDebugging(void) {
+    void* handle = dlopen(NULL, RTLD_GLOBAL | RTLD_NOW);
+    if (handle) {
+        ptrace_ptr_t ptrace_func = (ptrace_ptr_t)dlsym(handle, "ptrace");
+        if (ptrace_func) {
+            ptrace_func(31, 0, 0, 0); // PT_DENY_ATTACH
+        }
+        dlclose(handle);
+    }
+}
 
 @interface AppLockViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UIView *cardContainerView;
@@ -24,8 +89,8 @@
 @implementation AppLockViewController
 
 + (BOOL)isSubscriptionValid {
-    NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationTimestamp"];
-    double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationDurationDays"];
+    NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:getKeyTimestamp()];
+    double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:getKeyDuration()];
     
     if (activatedTime <= 0 || durationDays <= 0) return NO;
     
@@ -36,8 +101,8 @@
 }
 
 + (NSString *)remainingTimeString {
-    NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationTimestamp"];
-    double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationDurationDays"];
+    NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:getKeyTimestamp()];
+    double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:getKeyDuration()];
     if (activatedTime <= 0 || durationDays <= 0) return @"منتهي الصلاحية";
     
     NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
@@ -73,10 +138,10 @@
 }
 
 + (void)syncSubscriptionWithServer {
-    NSString *savedCode = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppActivatedCode"];
+    NSString *savedCode = [[NSUserDefaults standardUserDefaults] stringForKey:getKeyActivatedCode()];
     if (!savedCode || savedCode.length == 0) return;
     
-    NSURL *url = [NSURL URLWithString:@"https://raw.githubusercontent.com/Amaryt1/A/refs/heads/main/public/keys.json"];
+    NSURL *url = [NSURL URLWithString:getApiUrl()];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
                                                             cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
                                                         timeoutInterval:10.0];
@@ -128,12 +193,12 @@
         
         dispatch_async(dispatch_get_main_queue(), ^{
             if (isStillValid) {
-                [[NSUserDefaults standardUserDefaults] setDouble:newDurationDays forKey:@"AppActivationDurationDays"];
+                [[NSUserDefaults standardUserDefaults] setDouble:newDurationDays forKey:getKeyDuration()];
                 [[NSUserDefaults standardUserDefaults] synchronize];
             } else {
-                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivationTimestamp"];
-                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivationDurationDays"];
-                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivatedCode"];
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:getKeyTimestamp()];
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:getKeyDuration()];
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:getKeyActivatedCode()];
                 [[NSUserDefaults standardUserDefaults] synchronize];
                 
                 UIWindow *window = nil;
@@ -330,7 +395,7 @@
 
 - (void)openTelegram {
     [self triggerHapticFeedback:UIImpactFeedbackStyleMedium];
-    NSURL *telegramURL = [NSURL URLWithString:@"https://telegram.me/LLYDL"];
+    NSURL *telegramURL = [NSURL URLWithString:getTelegramUrl()];
     [[UIApplication sharedApplication] openURL:telegramURL options:@{} completionHandler:nil];
 }
 
@@ -353,7 +418,7 @@
     self.submitButton.enabled = NO;
     self.statusLabel.text = @"جاري الاتصال باللوحة...";
     
-    NSURL *url = [NSURL URLWithString:@"https://raw.githubusercontent.com/Amaryt1/A/refs/heads/main/public/keys.json"];
+    NSURL *url = [NSURL URLWithString:getApiUrl()];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
                                                             cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
                                                         timeoutInterval:10.0];
@@ -425,15 +490,14 @@
             }
             
             if (isValidKey) {
-                // إيقاف العداد فور النجاح وإطلاق اهتزاز التفعيل
                 [self.autoExitTimer invalidate];
                 self.autoExitTimer = nil;
                 [self triggerHapticNotification:UINotificationFeedbackTypeSuccess];
                 
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-                [[NSUserDefaults standardUserDefaults] setDouble:now forKey:@"AppActivationTimestamp"];
-                [[NSUserDefaults standardUserDefaults] setDouble:durationDays forKey:@"AppActivationDurationDays"];
-                [[NSUserDefaults standardUserDefaults] setObject:code forKey:@"AppActivatedCode"];
+                [[NSUserDefaults standardUserDefaults] setDouble:now forKey:getKeyTimestamp()];
+                [[NSUserDefaults standardUserDefaults] setDouble:durationDays forKey:getKeyDuration()];
+                [[NSUserDefaults standardUserDefaults] setObject:code forKey:getKeyActivatedCode()];
                 [[NSUserDefaults standardUserDefaults] synchronize];
                 
                 UIViewController *presentingVC = self.presentingViewController;
@@ -486,6 +550,9 @@ static void showLockScreenIfNeeded(void) {
 }
 
 static void __attribute__((constructor)) initializeAppLock(void) {
+    // إطلاق الحماية ضد أدوات التصحيح (Anti-Debug)
+    applyAntiDebugging();
+
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
