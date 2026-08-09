@@ -12,11 +12,12 @@
 + (BOOL)isSubscriptionValid;
 + (NSString *)remainingTimeString;
 + (void)showSuccessNotificationOnVC:(UIViewController *)vc;
++ (void)syncSubscriptionWithServer;
 @end
 
 @implementation AppLockViewController
 
-// 1. فحص صلاحية الاشتراك والتأكد أنه غير منتهي
+// 1. فحص صلاحية الاشتراك محلياً
 + (BOOL)isSubscriptionValid {
     NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationTimestamp"];
     double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationDurationDays"];
@@ -55,7 +56,7 @@
     return [parts componentsJoinedByString:@" و "];
 }
 
-// إظهار إشعار تفاصيل التفعيل والوقت المتبقي
+// إظهار إشعار حالة الاشتراك
 + (void)showSuccessNotificationOnVC:(UIViewController *)vc {
     if (!vc) return;
     NSString *remainingText = [self remainingTimeString];
@@ -66,6 +67,98 @@
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"موافق" style:UIAlertActionStyleDefault handler:nil]];
     [vc presentViewController:alert animated:YES completion:nil];
+}
+
+// 3. مزامنة البيانات وتحديث الأيام تلقائياً من السيرفر عند دخول المستخدم
++ (void)syncSubscriptionWithServer {
+    NSString *savedCode = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppActivatedCode"];
+    if (!savedCode || savedCode.length == 0) return;
+    
+    NSURL *url = [NSURL URLWithString:@"https://raw.githubusercontent.com/Amaryt1/A/refs/heads/main/public/keys.json"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
+                                                            cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
+                                                        timeoutInterval:10.0];
+    [request setHTTPMethod:@"GET"];
+    [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" forHTTPHeaderField:@"User-Agent"];
+    [request setValue:@"application/json, text/plain, */*" forHTTPHeaderField:@"Accept"];
+    
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (error || !data) return;
+        
+        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+        if (httpResponse.statusCode != 200) return;
+        
+        NSError *jsonError;
+        id jsonObject = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+        if (jsonError) return;
+        
+        BOOL isStillValid = NO;
+        double newDurationDays = 30.0;
+        
+        if ([jsonObject isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *dict = (NSDictionary *)jsonObject;
+            NSArray *details = dict[@"details"];
+            if ([details isKindOfClass:[NSArray class]]) {
+                for (id item in details) {
+                    if ([item isKindOfClass:[NSDictionary class]]) {
+                        NSString *k = item[@"code"] ?: item[@"key"];
+                        if (k && [k isEqualToString:savedCode]) {
+                            isStillValid = YES;
+                            double customDays = [item[@"days"] doubleValue];
+                            if (customDays > 0) newDurationDays = customDays;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!isStillValid) {
+                NSArray *validKeys = dict[@"valid_keys"];
+                if ([validKeys isKindOfClass:[NSArray class]] && [validKeys containsObject:savedCode]) {
+                    isStillValid = YES;
+                }
+            }
+        } else if ([jsonObject isKindOfClass:[NSArray class]]) {
+            NSArray *array = (NSArray *)jsonObject;
+            if ([array containsObject:savedCode]) {
+                isStillValid = YES;
+            }
+        }
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (isStillValid) {
+                // تحديث الأيام بالقيم الجديدة القادمة من keys.json فوراً
+                [[NSUserDefaults standardUserDefaults] setDouble:newDurationDays forKey:@"AppActivationDurationDays"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+            } else {
+                // إذا حُذف الكود من السيرفر يتم سحب التفعيل وإعادة إظهار القفل
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivationTimestamp"];
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivationDurationDays"];
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivatedCode"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+                
+                UIWindow *window = nil;
+                #pragma clang diagnostic push
+                #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+                window = [UIApplication sharedApplication].keyWindow;
+                #pragma clang diagnostic pop
+                if (!window && [UIApplication sharedApplication].windows.count > 0) {
+                    window = [UIApplication sharedApplication].windows.firstObject;
+                }
+                if (window) {
+                    UIViewController *rootVC = window.rootViewController;
+                    while (rootVC.presentedViewController) {
+                        rootVC = rootVC.presentedViewController;
+                    }
+                    if (![rootVC isKindOfClass:[AppLockViewController class]]) {
+                        AppLockViewController *lockVC = [[AppLockViewController alloc] init];
+                        lockVC.modalPresentationStyle = UIModalPresentationFullScreen;
+                        [rootVC presentViewController:lockVC animated:NO completion:nil];
+                    }
+                }
+            }
+        });
+    }];
+    [task resume];
 }
 
 - (void)viewDidLoad {
@@ -124,7 +217,7 @@
     self.spinner.color = [UIColor whiteColor];
     [self.view addSubview:self.spinner];
     
-    // مؤقت إغلاق التطبيق تلقائياً بعد 15 ثانية عند التأخر في إدخال الكود
+    // مؤقت الخروج التلقائي بعد 15 ثانية
     self.autoExitTimer = [NSTimer scheduledTimerWithTimeInterval:15.0
                                                      target:self
                                                    selector:@selector(handleTimeoutExit)
@@ -222,13 +315,13 @@
             }
             
             if (isValidKey) {
-                // إيقاف مؤقت الخروج التلقائي فور التحقق بنجاح
                 [self.autoExitTimer invalidate];
                 self.autoExitTimer = nil;
                 
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
                 [[NSUserDefaults standardUserDefaults] setDouble:now forKey:@"AppActivationTimestamp"];
                 [[NSUserDefaults standardUserDefaults] setDouble:durationDays forKey:@"AppActivationDurationDays"];
+                [[NSUserDefaults standardUserDefaults] setObject:code forKey:@"AppActivatedCode"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
                 
                 UIViewController *presentingVC = self.presentingViewController;
@@ -271,8 +364,9 @@ static void showLockScreenIfNeeded(void) {
                 lockVC.modalPresentationStyle = UIModalPresentationFullScreen;
                 [rootVC presentViewController:lockVC animated:NO completion:nil];
             } else {
-                // إشعار بالوقت المتبقي عند الدخول إذا كان المفتاح متصلاً وفعالاً
                 [AppLockViewController showSuccessNotificationOnVC:rootVC];
+                // المزامنة الفورية للبيانات في الخلفية لتطبيق تعديلات السيرفر فوراً
+                [AppLockViewController syncSubscriptionWithServer];
             }
         }
     });
