@@ -81,13 +81,14 @@
     self.submitButton.enabled = NO;
     self.statusLabel.text = @"جاري الاتصال باللوحة...";
     
-    NSURL *url = [NSURL URLWithString:@"https://a-coral-two-10.vercel.app/api/keys"];
+    // الرابط المباشر لملف الـ JSON الثابت من GitHub
+    NSURL *url = [NSURL URLWithString:@"https://raw.githubusercontent.com/Amaryt1/A/refs/heads/main/public/keys.json"];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
-                                                            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                            cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
                                                         timeoutInterval:10.0];
     [request setHTTPMethod:@"GET"];
     [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" forHTTPHeaderField:@"User-Agent"];
-    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"application/json, text/plain, */*" forHTTPHeaderField:@"Accept"];
     
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -96,6 +97,12 @@
             
             if (error || !data) {
                 self.statusLabel.text = @"تعذر الاتصال بقائمة المفاتيح";
+                return;
+            }
+            
+            NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+            if (httpResponse.statusCode != 200) {
+                self.statusLabel.text = [NSString stringWithFormat:@"خطأ سيرفر رمز: %ld", (long)httpResponse.statusCode];
                 return;
             }
             
@@ -109,27 +116,36 @@
             BOOL isValidKey = NO;
             double durationDays = 30.0;
             
-            NSArray *itemsArray = nil;
             if ([jsonObject isKindOfClass:[NSDictionary class]]) {
-                itemsArray = jsonObject[@"details"];
-            } else if ([jsonObject isKindOfClass:[NSArray class]]) {
-                itemsArray = (NSArray *)jsonObject;
-            }
-            
-            if (itemsArray) {
-                for (id item in itemsArray) {
-                    if ([item isKindOfClass:[NSDictionary class]]) {
-                        NSString *k = item[@"code"] ?: item[@"key"] ?: item[@"passcode"];
-                        if (k && [k isEqualToString:code]) {
-                            isValidKey = YES;
-                            double customDays = [item[@"days"] doubleValue];
-                            if (customDays > 0) durationDays = customDays;
-                            break;
+                NSDictionary *dict = (NSDictionary *)jsonObject;
+                
+                // 1. الفحص داخل قائمة التفاصيل details
+                NSArray *details = dict[@"details"];
+                if ([details isKindOfClass:[NSArray class]]) {
+                    for (id item in details) {
+                        if ([item isKindOfClass:[NSDictionary class]]) {
+                            NSString *k = item[@"code"] ?: item[@"key"];
+                            if (k && [k isEqualToString:code]) {
+                                isValidKey = YES;
+                                double customDays = [item[@"days"] doubleValue];
+                                if (customDays > 0) durationDays = customDays;
+                                break;
+                            }
                         }
-                    } else if ([item isKindOfClass:[NSString class]] && [item isEqualToString:code]) {
-                        isValidKey = YES;
-                        break;
                     }
+                }
+                
+                // 2. الفحص داخل قائمة valid_keys المباشرة
+                if (!isValidKey) {
+                    NSArray *validKeys = dict[@"valid_keys"];
+                    if ([validKeys isKindOfClass:[NSArray class]] && [validKeys containsObject:code]) {
+                        isValidKey = YES;
+                    }
+                }
+            } else if ([jsonObject isKindOfClass:[NSArray class]]) {
+                NSArray *array = (NSArray *)jsonObject;
+                if ([array containsObject:code]) {
+                    isValidKey = YES;
                 }
             }
             
