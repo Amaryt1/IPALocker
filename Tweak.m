@@ -4,14 +4,19 @@
 @interface AppLockViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *passcodeTextField;
 @property (nonatomic, strong) UIButton *submitButton;
+@property (nonatomic, strong) UIButton *telegramButton;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) NSTimer *autoExitTimer;
 
 + (BOOL)isSubscriptionValid;
++ (NSString *)remainingTimeString;
++ (void)showSuccessNotificationOnVC:(UIViewController *)vc;
 @end
 
 @implementation AppLockViewController
 
+// 1. فحص صلاحية الاشتراك والتأكد أنه غير منتهي
 + (BOOL)isSubscriptionValid {
     NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationTimestamp"];
     double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationDurationDays"];
@@ -22,6 +27,45 @@
     NSTimeInterval allowedDuration = durationDays * 86400.0;
     
     return (currentTime - activatedTime) < allowedDuration;
+}
+
+// 2. حساب الوقت المتبقي باليوم والدقيقة والساعة والثانية
++ (NSString *)remainingTimeString {
+    NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationTimestamp"];
+    double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationDurationDays"];
+    if (activatedTime <= 0 || durationDays <= 0) return @"منتهي الصلاحية";
+    
+    NSTimeInterval currentTime = [[NSDate date] timeIntervalSince1970];
+    NSTimeInterval allowedDuration = durationDays * 86400.0;
+    NSTimeInterval remaining = allowedDuration - (currentTime - activatedTime);
+    
+    if (remaining <= 0) return @"منتهي الصلاحية";
+    
+    NSInteger days = (NSInteger)(remaining / 86400.0);
+    NSInteger hours = (NSInteger)((remaining - (days * 86400)) / 3600.0);
+    NSInteger minutes = (NSInteger)((remaining - (days * 86400) - (hours * 3600)) / 60.0);
+    NSInteger seconds = (NSInteger)(remaining) % 60;
+    
+    NSMutableArray *parts = [NSMutableArray array];
+    if (days > 0) [parts addObject:[NSString stringWithFormat:@"%ld يوم", (long)days]];
+    if (hours > 0) [parts addObject:[NSString stringWithFormat:@"%ld ساعة", (long)hours]];
+    if (minutes > 0) [parts addObject:[NSString stringWithFormat:@"%ld دقيقة", (long)minutes]];
+    [parts addObject:[NSString stringWithFormat:@"%ld ثانية", (long)seconds]];
+    
+    return [parts componentsJoinedByString:@" و "];
+}
+
+// إظهار إشعار تفاصيل التفعيل والوقت المتبقي
++ (void)showSuccessNotificationOnVC:(UIViewController *)vc {
+    if (!vc) return;
+    NSString *remainingText = [self remainingTimeString];
+    NSString *message = [NSString stringWithFormat:@"اشتراكك فعال بنجاح!\nالمتبقي: %@", remainingText];
+    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"✅ حالة الاشتراك"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"موافق" style:UIAlertActionStyleDefault handler:nil]];
+    [vc presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)viewDidLoad {
@@ -35,28 +79,29 @@
     blurEffectView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:blurEffectView];
     
-    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 160, self.view.bounds.size.width - 40, 40)];
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 140, self.view.bounds.size.width - 40, 40)];
     titleLabel.text = @"التطبيق محمي بكلمة مرور";
     titleLabel.textAlignment = NSTextAlignmentCenter;
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.font = [UIFont boldSystemFontOfSize:22];
     [self.view addSubview:titleLabel];
     
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 210, self.view.bounds.size.width - 40, 30)];
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 190, self.view.bounds.size.width - 40, 30)];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     self.statusLabel.textColor = [UIColor systemRedColor];
     self.statusLabel.font = [UIFont systemFontOfSize:14];
     [self.view addSubview:self.statusLabel];
     
-    self.passcodeTextField = [[UITextField alloc] initWithFrame:CGRectMake(40, 260, self.view.bounds.size.width - 80, 50)];
+    self.passcodeTextField = [[UITextField alloc] initWithFrame:CGRectMake(40, 230, self.view.bounds.size.width - 80, 50)];
     self.passcodeTextField.placeholder = @"أدخل كود التفعيل";
     self.passcodeTextField.borderStyle = UITextBorderStyleRoundedRect;
     self.passcodeTextField.secureTextEntry = YES;
     self.passcodeTextField.textAlignment = NSTextAlignmentCenter;
     [self.view addSubview:self.passcodeTextField];
     
+    // زر تحقق وتفعيل
     self.submitButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.submitButton.frame = CGRectMake(40, 330, self.view.bounds.size.width - 80, 50);
+    self.submitButton.frame = CGRectMake(40, 295, self.view.bounds.size.width - 80, 50);
     [self.submitButton setTitle:@"تحقق وتفعيل" forState:UIControlStateNormal];
     self.submitButton.backgroundColor = [UIColor systemBlueColor];
     [self.submitButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -64,10 +109,40 @@
     [self.submitButton addTarget:self action:@selector(verifyCode) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.submitButton];
     
+    // 4. زر التليجرام تحت زر التفعيل
+    self.telegramButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.telegramButton.frame = CGRectMake(40, 355, self.view.bounds.size.width - 80, 45);
+    [self.telegramButton setTitle:@"✈️ الدعم عبر تليجرام" forState:UIControlStateNormal];
+    self.telegramButton.backgroundColor = [UIColor colorWithRed:0.0/255.0 green:136.0/255.0 blue:204.0/255.0 alpha:1.0];
+    [self.telegramButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.telegramButton.layer.cornerRadius = 10;
+    [self.telegramButton addTarget:self action:@selector(openTelegram) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.telegramButton];
+    
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    self.spinner.center = CGPointMake(self.view.bounds.size.width / 2, 400);
+    self.spinner.center = CGPointMake(self.view.bounds.size.width / 2, 420);
     self.spinner.color = [UIColor whiteColor];
     [self.view addSubview:self.spinner];
+    
+    // 3. مؤقت إغلاق التطبيق تلقائياً بعد 5 ثوانٍ عند تأخر إدخال الكود
+    self.autoExitTimer = [NSTimer scheduledTimerWithTimeInterval:5.0
+                                                     target:self
+                                                   selector:@selector(handleTimeoutExit)
+                                                   userInfo:nil
+                                                    repeats:NO];
+}
+
+- (void)openTelegram {
+    NSURL *telegramURL = [NSURL URLWithString:@"https://telegram.me/LLYDL"];
+    [[UIApplication sharedApplication] openURL:telegramURL options:@{} completionHandler:nil];
+}
+
+- (void)handleTimeoutExit {
+    exit(0);
+}
+
+- (void)dealloc {
+    [self.autoExitTimer invalidate];
 }
 
 - (void)verifyCode {
@@ -81,7 +156,6 @@
     self.submitButton.enabled = NO;
     self.statusLabel.text = @"جاري الاتصال باللوحة...";
     
-    // الرابط المباشر لملف الـ JSON الثابت من GitHub
     NSURL *url = [NSURL URLWithString:@"https://raw.githubusercontent.com/Amaryt1/A/refs/heads/main/public/keys.json"];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
                                                             cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
@@ -119,7 +193,6 @@
             if ([jsonObject isKindOfClass:[NSDictionary class]]) {
                 NSDictionary *dict = (NSDictionary *)jsonObject;
                 
-                // 1. الفحص داخل قائمة التفاصيل details
                 NSArray *details = dict[@"details"];
                 if ([details isKindOfClass:[NSArray class]]) {
                     for (id item in details) {
@@ -135,7 +208,6 @@
                     }
                 }
                 
-                // 2. الفحص داخل قائمة valid_keys المباشرة
                 if (!isValidKey) {
                     NSArray *validKeys = dict[@"valid_keys"];
                     if ([validKeys isKindOfClass:[NSArray class]] && [validKeys containsObject:code]) {
@@ -150,12 +222,21 @@
             }
             
             if (isValidKey) {
+                // إيقاف مؤقت الخروج التلقائي فور التحقق بنجاح
+                [self.autoExitTimer invalidate];
+                self.autoExitTimer = nil;
+                
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
                 [[NSUserDefaults standardUserDefaults] setDouble:now forKey:@"AppActivationTimestamp"];
                 [[NSUserDefaults standardUserDefaults] setDouble:durationDays forKey:@"AppActivationDurationDays"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
                 
-                [self dismissViewControllerAnimated:YES completion:nil];
+                UIViewController *presentingVC = self.presentingViewController;
+                [self dismissViewControllerAnimated:YES completion:^{
+                    if (presentingVC) {
+                        [AppLockViewController showSuccessNotificationOnVC:presentingVC];
+                    }
+                }];
             } else {
                 self.statusLabel.text = @"الكود غير صحيح أو منتهي الصلاحية";
             }
@@ -166,36 +247,51 @@
 
 @end
 
+static void showLockScreenIfNeeded(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *window = nil;
+        
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        window = [UIApplication sharedApplication].keyWindow;
+        #pragma clang diagnostic pop
+        
+        if (!window && [UIApplication sharedApplication].windows.count > 0) {
+            window = [UIApplication sharedApplication].windows.firstObject;
+        }
+        
+        if (window) {
+            UIViewController *rootVC = window.rootViewController;
+            while (rootVC.presentedViewController) {
+                rootVC = rootVC.presentedViewController;
+            }
+            
+            if (![AppLockViewController isSubscriptionValid]) {
+                AppLockViewController *lockVC = [[AppLockViewController alloc] init];
+                lockVC.modalPresentationStyle = UIModalPresentationFullScreen;
+                [rootVC presentViewController:lockVC animated:NO completion:nil];
+            } else {
+                // إشعار بالوقت المتبقي عند الدخول إذا كان المفتاح متصلاً وفعالاً
+                [AppLockViewController showSuccessNotificationOnVC:rootVC];
+            }
+        }
+    });
+}
+
 static void __attribute__((constructor)) initializeAppLock(void) {
+    // فحص المفتاح عند فتح التطبيق لأول مرة
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
                                                   usingBlock:^(NSNotification * _Nonnull note) {
-        
-        if (![AppLockViewController isSubscriptionValid]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                UIWindow *window = nil;
-                
-                #pragma clang diagnostic push
-                #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                window = [UIApplication sharedApplication].keyWindow;
-                #pragma clang diagnostic pop
-                
-                if (!window && [UIApplication sharedApplication].windows.count > 0) {
-                    window = [UIApplication sharedApplication].windows.firstObject;
-                }
-                
-                if (window) {
-                    AppLockViewController *lockVC = [[AppLockViewController alloc] init];
-                    lockVC.modalPresentationStyle = UIModalPresentationFullScreen;
-                    
-                    UIViewController *rootVC = window.rootViewController;
-                    while (rootVC.presentedViewController) {
-                        rootVC = rootVC.presentedViewController;
-                    }
-                    [rootVC presentViewController:lockVC animated:NO completion:nil];
-                }
-            });
-        }
+        showLockScreenIfNeeded();
+    }];
+    
+    // 1. إعادة فحص المفتاح والتأكد من الاتصال في كل مرة يدخل فيها المستخدم للتطبيق (حتى من الخلفية)
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
+                                                      object:nil
+                                                       queue:[NSOperationQueue mainQueue]
+                                                  usingBlock:^(NSNotification * _Nonnull note) {
+        showLockScreenIfNeeded();
     }];
 }
