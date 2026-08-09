@@ -4,6 +4,10 @@
 #import <dlfcn.h>
 #import <sys/types.h>
 
+// --- متغيرات التحقق للحد من التكرار ---
+static BOOL isShowingLockScreen = NO;
+static BOOL hasShownSuccessAlertThisSession = NO;
+
 // --- دالة التشفير وفك التشفير الديناميكية للنصوص ---
 static inline NSString *secStr(const unsigned char *data, size_t len, unsigned char key) {
     char *outData = (char *)malloc(len + 1);
@@ -66,6 +70,8 @@ static void applyAntiDebugging(void) {
         dlclose(handle);
     }
 }
+
+static void showLockScreenIfNeeded(void);
 
 @interface AppLockViewController : UIViewController <UITextFieldDelegate>
 @property (nonatomic, strong) UIView *cardContainerView;
@@ -201,25 +207,7 @@ static void applyAntiDebugging(void) {
                 [[NSUserDefaults standardUserDefaults] removeObjectForKey:getKeyActivatedCode()];
                 [[NSUserDefaults standardUserDefaults] synchronize];
                 
-                UIWindow *window = nil;
-                #pragma clang diagnostic push
-                #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                window = [UIApplication sharedApplication].keyWindow;
-                #pragma clang diagnostic pop
-                if (!window && [UIApplication sharedApplication].windows.count > 0) {
-                    window = [UIApplication sharedApplication].windows.firstObject;
-                }
-                if (window) {
-                    UIViewController *rootVC = window.rootViewController;
-                    while (rootVC.presentedViewController) {
-                        rootVC = rootVC.presentedViewController;
-                    }
-                    if (![rootVC isKindOfClass:[AppLockViewController class]]) {
-                        AppLockViewController *lockVC = [[AppLockViewController alloc] init];
-                        lockVC.modalPresentationStyle = UIModalPresentationFullScreen;
-                        [rootVC presentViewController:lockVC animated:NO completion:nil];
-                    }
-                }
+                showLockScreenIfNeeded();
             }
         });
     }];
@@ -231,7 +219,6 @@ static void applyAntiDebugging(void) {
     
     self.view.backgroundColor = [UIColor blackColor];
     
-    // 1. خلفية الضباب
     UIBlurEffect *blurEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
     UIVisualEffectView *blurEffectView = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
     blurEffectView.frame = self.view.bounds;
@@ -242,7 +229,6 @@ static void applyAntiDebugging(void) {
     CGFloat cardWidth = MIN(screenWidth - 40, 350);
     CGFloat cardHeight = 440;
     
-    // 2. بطاقة زجاجية (Glassmorphism Container)
     self.cardContainerView = [[UIView alloc] initWithFrame:CGRectMake((screenWidth - cardWidth) / 2, (self.view.bounds.size.height - cardHeight) / 2, cardWidth, cardHeight)];
     self.cardContainerView.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.75];
     self.cardContainerView.layer.cornerRadius = 22;
@@ -251,7 +237,6 @@ static void applyAntiDebugging(void) {
     self.cardContainerView.clipsToBounds = YES;
     [self.view addSubview:self.cardContainerView];
     
-    // 3. شريط العد التنازلي التفاعلي (15 ثانية)
     self.timerProgressView = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
     self.timerProgressView.frame = CGRectMake(0, 0, cardWidth, 4);
     self.timerProgressView.progressTintColor = [UIColor systemBlueColor];
@@ -259,7 +244,6 @@ static void applyAntiDebugging(void) {
     self.timerProgressView.progress = 1.0;
     [self.cardContainerView addSubview:self.timerProgressView];
     
-    // 4. شعار / أيقونة القفل
     self.headerIconView = [[UIImageView alloc] initWithFrame:CGRectMake((cardWidth - 54) / 2, 25, 54, 54)];
     if (@available(iOS 13.0, *)) {
         self.headerIconView.image = [UIImage systemImageNamed:@"lock.shield.fill"];
@@ -268,7 +252,6 @@ static void applyAntiDebugging(void) {
     self.headerIconView.contentMode = UIViewContentModeScaleAspectFit;
     [self.cardContainerView addSubview:self.headerIconView];
     
-    // 5. العنوان الرئيسية
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(15, 90, cardWidth - 30, 30)];
     titleLabel.text = @"تفعيل الاشتراك";
     titleLabel.textAlignment = NSTextAlignmentCenter;
@@ -276,14 +259,12 @@ static void applyAntiDebugging(void) {
     titleLabel.font = [UIFont boldSystemFontOfSize:20];
     [self.cardContainerView addSubview:titleLabel];
     
-    // 6. نص الحالة والأخطاء
     self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(15, 125, cardWidth - 30, 25)];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     self.statusLabel.textColor = [UIColor systemRedColor];
     self.statusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
     [self.cardContainerView addSubview:self.statusLabel];
     
-    // 7. حقل النص الإدخال + زر اللصق السريع
     self.passcodeTextField = [[UITextField alloc] initWithFrame:CGRectMake(20, 160, cardWidth - 40, 50)];
     self.passcodeTextField.placeholder = @"أدخل كود التفعيل";
     self.passcodeTextField.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
@@ -294,7 +275,6 @@ static void applyAntiDebugging(void) {
     self.passcodeTextField.secureTextEntry = YES;
     self.passcodeTextField.textAlignment = NSTextAlignmentCenter;
     
-    // زر اللصق داخل حقل النص
     UIButton *pasteBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     pasteBtn.frame = CGRectMake(0, 0, 45, 50);
     if (@available(iOS 13.0, *)) {
@@ -309,7 +289,6 @@ static void applyAntiDebugging(void) {
     self.passcodeTextField.rightViewMode = UITextFieldViewModeAlways;
     [self.cardContainerView addSubview:self.passcodeTextField];
     
-    // 8. زر التحقق والتفعيل
     self.submitButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.submitButton.frame = CGRectMake(20, 230, cardWidth - 40, 50);
     [self.submitButton setTitle:@"تحقق وتفعيل" forState:UIControlStateNormal];
@@ -320,7 +299,6 @@ static void applyAntiDebugging(void) {
     [self.submitButton addTarget:self action:@selector(verifyCode) forControlEvents:UIControlEventTouchUpInside];
     [self.cardContainerView addSubview:self.submitButton];
     
-    // 9. زر الدعم عبر تليجرام
     self.telegramButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.telegramButton.frame = CGRectMake(20, 295, cardWidth - 40, 45);
     [self.telegramButton setTitle:@"✈️ الدعم عبر تليجرام" forState:UIControlStateNormal];
@@ -331,13 +309,11 @@ static void applyAntiDebugging(void) {
     [self.telegramButton addTarget:self action:@selector(openTelegram) forControlEvents:UIControlEventTouchUpInside];
     [self.cardContainerView addSubview:self.telegramButton];
     
-    // 10. مؤشر التحميل
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     self.spinner.center = CGPointMake(cardWidth / 2, 375);
     self.spinner.color = [UIColor whiteColor];
     [self.cardContainerView addSubview:self.spinner];
     
-    // بدء العداد التنازلي (15 ثانية)
     self.remainingTime = 15.0;
     self.autoExitTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
                                                      target:self
@@ -346,7 +322,11 @@ static void applyAntiDebugging(void) {
                                                     repeats:YES];
 }
 
-// زر اللصق السريع
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    isShowingLockScreen = NO;
+}
+
 - (void)pasteFromClipboard {
     [self triggerHapticFeedback:UIImpactFeedbackStyleLight];
     NSString *clipboardString = [UIPasteboard generalPasteboard].string;
@@ -355,7 +335,6 @@ static void applyAntiDebugging(void) {
     }
 }
 
-// تحديث شريط التقدم كل 0.1 ثانية والإنهاء بعد 15 ثانية
 - (void)updateCountdownProgress {
     self.remainingTime -= 0.1;
     float progress = MAX(0.0, self.remainingTime / 15.0);
@@ -367,7 +346,6 @@ static void applyAntiDebugging(void) {
     }
 }
 
-// تأثير الاهتزاز التفاعلي (Haptic)
 - (void)triggerHapticNotification:(UINotificationFeedbackType)type {
     if (@available(iOS 10.0, *)) {
         UINotificationFeedbackGenerator *generator = [[UINotificationFeedbackGenerator alloc] init];
@@ -384,7 +362,6 @@ static void applyAntiDebugging(void) {
     }
 }
 
-// تأثير اهتزاز حقل النص عند الخطأ (Shake Animation)
 - (void)shakeView:(UIView *)viewToShake {
     CAKeyframeAnimation *animation = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
     animation.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
@@ -503,6 +480,7 @@ static void applyAntiDebugging(void) {
                 UIViewController *presentingVC = self.presentingViewController;
                 [self dismissViewControllerAnimated:YES completion:^{
                     if (presentingVC) {
+                        hasShownSuccessAlertThisSession = YES;
                         [AppLockViewController showSuccessNotificationOnVC:presentingVC];
                     }
                 }];
@@ -519,7 +497,7 @@ static void applyAntiDebugging(void) {
 @end
 
 static void showLockScreenIfNeeded(void) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *window = nil;
         
         #pragma clang diagnostic push
@@ -531,35 +509,46 @@ static void showLockScreenIfNeeded(void) {
             window = [UIApplication sharedApplication].windows.firstObject;
         }
         
-        if (window) {
-            UIViewController *rootVC = window.rootViewController;
-            while (rootVC.presentedViewController) {
-                rootVC = rootVC.presentedViewController;
+        if (!window) return;
+        
+        UIViewController *rootVC = window.rootViewController;
+        if (!rootVC) return;
+        
+        // جلب الواجهة العلوية المعروضة وإلغاء الاستدعاء إذا كانت الواجهة موجودة مسبقاً
+        UIViewController *topVC = rootVC;
+        while (topVC.presentedViewController) {
+            if ([topVC.presentedViewController isKindOfClass:[AppLockViewController class]]) {
+                return;
             }
+            topVC = topVC.presentedViewController;
+        }
+        
+        if ([topVC isKindOfClass:[AppLockViewController class]]) {
+            return;
+        }
+        
+        if (![AppLockViewController isSubscriptionValid]) {
+            if (isShowingLockScreen) return;
+            isShowingLockScreen = YES;
             
-            if (![AppLockViewController isSubscriptionValid]) {
-                AppLockViewController *lockVC = [[AppLockViewController alloc] init];
-                lockVC.modalPresentationStyle = UIModalPresentationFullScreen;
-                [rootVC presentViewController:lockVC animated:NO completion:nil];
-            } else {
-                [AppLockViewController showSuccessNotificationOnVC:rootVC];
-                [AppLockViewController syncSubscriptionWithServer];
+            AppLockViewController *lockVC = [[AppLockViewController alloc] init];
+            lockVC.modalPresentationStyle = UIModalPresentationFullScreen;
+            [topVC presentViewController:lockVC animated:NO completion:nil];
+        } else {
+            // إظهار تنبيه الاشتراك مرة واحدة فقط في الجلسة لمنع التكرار المزعج
+            if (!hasShownSuccessAlertThisSession) {
+                hasShownSuccessAlertThisSession = YES;
+                [AppLockViewController showSuccessNotificationOnVC:topVC];
             }
+            [AppLockViewController syncSubscriptionWithServer];
         }
     });
 }
 
 static void __attribute__((constructor)) initializeAppLock(void) {
-    // إطلاق الحماية ضد أدوات التصحيح (Anti-Debug)
     applyAntiDebugging();
 
-    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
-                                                      object:nil
-                                                       queue:[NSOperationQueue mainQueue]
-                                                  usingBlock:^(NSNotification * _Nonnull note) {
-        showLockScreenIfNeeded();
-    }];
-    
+    // المراقبة عند دخول التطبيق للواجهة بدون تكرار مراقب البداية
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
