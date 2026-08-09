@@ -1,13 +1,19 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#import <QuartzCore/QuartzCore.h>
 
 @interface AppLockViewController : UIViewController <UITextFieldDelegate>
+@property (nonatomic, strong) UIView *cardContainerView;
+@property (nonatomic, strong) UIImageView *headerIconView;
 @property (nonatomic, strong) UITextField *passcodeTextField;
 @property (nonatomic, strong) UIButton *submitButton;
 @property (nonatomic, strong) UIButton *telegramButton;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
+@property (nonatomic, strong) UIProgressView *timerProgressView;
+
 @property (nonatomic, strong) NSTimer *autoExitTimer;
+@property (nonatomic, assign) NSTimeInterval remainingTime;
 
 + (BOOL)isSubscriptionValid;
 + (NSString *)remainingTimeString;
@@ -17,7 +23,6 @@
 
 @implementation AppLockViewController
 
-// 1. فحص صلاحية الاشتراك محلياً
 + (BOOL)isSubscriptionValid {
     NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationTimestamp"];
     double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationDurationDays"];
@@ -30,7 +35,6 @@
     return (currentTime - activatedTime) < allowedDuration;
 }
 
-// 2. حساب الوقت المتبقي باليوم والدقيقة والساعة والثانية
 + (NSString *)remainingTimeString {
     NSTimeInterval activatedTime = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationTimestamp"];
     double durationDays = [[NSUserDefaults standardUserDefaults] doubleForKey:@"AppActivationDurationDays"];
@@ -56,7 +60,6 @@
     return [parts componentsJoinedByString:@" و "];
 }
 
-// إظهار إشعار حالة الاشتراك
 + (void)showSuccessNotificationOnVC:(UIViewController *)vc {
     if (!vc) return;
     NSString *remainingText = [self remainingTimeString];
@@ -69,7 +72,6 @@
     [vc presentViewController:alert animated:YES completion:nil];
 }
 
-// 3. مزامنة البيانات وتحديث الأيام تلقائياً من السيرفر عند دخول المستخدم
 + (void)syncSubscriptionWithServer {
     NSString *savedCode = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppActivatedCode"];
     if (!savedCode || savedCode.length == 0) return;
@@ -126,11 +128,9 @@
         
         dispatch_async(dispatch_get_main_queue(), ^{
             if (isStillValid) {
-                // تحديث الأيام بالقيم الجديدة القادمة من keys.json فوراً
                 [[NSUserDefaults standardUserDefaults] setDouble:newDurationDays forKey:@"AppActivationDurationDays"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
             } else {
-                // إذا حُذف الكود من السيرفر يتم سحب التفعيل وإعادة إظهار القفل
                 [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivationTimestamp"];
                 [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivationDurationDays"];
                 [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"AppActivatedCode"];
@@ -166,72 +166,172 @@
     
     self.view.backgroundColor = [UIColor blackColor];
     
+    // 1. خلفية الضباب
     UIBlurEffect *blurEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
     UIVisualEffectView *blurEffectView = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
     blurEffectView.frame = self.view.bounds;
     blurEffectView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:blurEffectView];
     
-    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 140, self.view.bounds.size.width - 40, 40)];
-    titleLabel.text = @"التطبيق محمي بكلمة مرور";
+    CGFloat screenWidth = self.view.bounds.size.width;
+    CGFloat cardWidth = MIN(screenWidth - 40, 350);
+    CGFloat cardHeight = 440;
+    
+    // 2. بطاقة زجاجية (Glassmorphism Container)
+    self.cardContainerView = [[UIView alloc] initWithFrame:CGRectMake((screenWidth - cardWidth) / 2, (self.view.bounds.size.height - cardHeight) / 2, cardWidth, cardHeight)];
+    self.cardContainerView.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.75];
+    self.cardContainerView.layer.cornerRadius = 22;
+    self.cardContainerView.layer.borderWidth = 1.0;
+    self.cardContainerView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.18].CGColor;
+    self.cardContainerView.clipsToBounds = YES;
+    [self.view addSubview:self.cardContainerView];
+    
+    // 3. شريط العد التنازلي التفاعلي (15 ثانية)
+    self.timerProgressView = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    self.timerProgressView.frame = CGRectMake(0, 0, cardWidth, 4);
+    self.timerProgressView.progressTintColor = [UIColor systemBlueColor];
+    self.timerProgressView.trackTintColor = [UIColor colorWithWhite:1.0 alpha:0.1];
+    self.timerProgressView.progress = 1.0;
+    [self.cardContainerView addSubview:self.timerProgressView];
+    
+    // 4. شعار / أيقونة القفل
+    self.headerIconView = [[UIImageView alloc] initWithFrame:CGRectMake((cardWidth - 54) / 2, 25, 54, 54)];
+    if (@available(iOS 13.0, *)) {
+        self.headerIconView.image = [UIImage systemImageNamed:@"lock.shield.fill"];
+        self.headerIconView.tintColor = [UIColor systemBlueColor];
+    }
+    self.headerIconView.contentMode = UIViewContentModeScaleAspectFit;
+    [self.cardContainerView addSubview:self.headerIconView];
+    
+    // 5. العنوان الرئيسية
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(15, 90, cardWidth - 30, 30)];
+    titleLabel.text = @"تفعيل الاشتراك";
     titleLabel.textAlignment = NSTextAlignmentCenter;
     titleLabel.textColor = [UIColor whiteColor];
-    titleLabel.font = [UIFont boldSystemFontOfSize:22];
-    [self.view addSubview:titleLabel];
+    titleLabel.font = [UIFont boldSystemFontOfSize:20];
+    [self.cardContainerView addSubview:titleLabel];
     
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 190, self.view.bounds.size.width - 40, 30)];
+    // 6. نص الحالة والأخطاء
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(15, 125, cardWidth - 30, 25)];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     self.statusLabel.textColor = [UIColor systemRedColor];
-    self.statusLabel.font = [UIFont systemFontOfSize:14];
-    [self.view addSubview:self.statusLabel];
+    self.statusLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
+    [self.cardContainerView addSubview:self.statusLabel];
     
-    self.passcodeTextField = [[UITextField alloc] initWithFrame:CGRectMake(40, 230, self.view.bounds.size.width - 80, 50)];
+    // 7. حقل النص الإدخال + زر اللصق السريع
+    self.passcodeTextField = [[UITextField alloc] initWithFrame:CGRectMake(20, 160, cardWidth - 40, 50)];
     self.passcodeTextField.placeholder = @"أدخل كود التفعيل";
-    self.passcodeTextField.borderStyle = UITextBorderStyleRoundedRect;
+    self.passcodeTextField.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.08];
+    self.passcodeTextField.layer.cornerRadius = 12;
+    self.passcodeTextField.layer.borderWidth = 1.0;
+    self.passcodeTextField.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.15].CGColor;
+    self.passcodeTextField.textColor = [UIColor whiteColor];
     self.passcodeTextField.secureTextEntry = YES;
     self.passcodeTextField.textAlignment = NSTextAlignmentCenter;
-    [self.view addSubview:self.passcodeTextField];
     
-    // زر تحقق وتفعيل
+    // زر اللصق داخل حقل النص
+    UIButton *pasteBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    pasteBtn.frame = CGRectMake(0, 0, 45, 50);
+    if (@available(iOS 13.0, *)) {
+        [pasteBtn setImage:[UIImage systemImageNamed:@"doc.on.clipboard"] forState:UIControlStateNormal];
+    } else {
+        [pasteBtn setTitle:@"لصق" forState:UIControlStateNormal];
+    }
+    pasteBtn.tintColor = [UIColor systemBlueColor];
+    [pasteBtn addTarget:self action:@selector(pasteFromClipboard) forControlEvents:UIControlEventTouchUpInside];
+    
+    self.passcodeTextField.rightView = pasteBtn;
+    self.passcodeTextField.rightViewMode = UITextFieldViewModeAlways;
+    [self.cardContainerView addSubview:self.passcodeTextField];
+    
+    // 8. زر التحقق والتفعيل
     self.submitButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.submitButton.frame = CGRectMake(40, 295, self.view.bounds.size.width - 80, 50);
+    self.submitButton.frame = CGRectMake(20, 230, cardWidth - 40, 50);
     [self.submitButton setTitle:@"تحقق وتفعيل" forState:UIControlStateNormal];
     self.submitButton.backgroundColor = [UIColor systemBlueColor];
     [self.submitButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.submitButton.layer.cornerRadius = 10;
+    self.submitButton.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    self.submitButton.layer.cornerRadius = 12;
     [self.submitButton addTarget:self action:@selector(verifyCode) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.submitButton];
+    [self.cardContainerView addSubview:self.submitButton];
     
-    // زر التليجرام
+    // 9. زر الدعم عبر تليجرام
     self.telegramButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.telegramButton.frame = CGRectMake(40, 355, self.view.bounds.size.width - 80, 45);
+    self.telegramButton.frame = CGRectMake(20, 295, cardWidth - 40, 45);
     [self.telegramButton setTitle:@"✈️ الدعم عبر تليجرام" forState:UIControlStateNormal];
-    self.telegramButton.backgroundColor = [UIColor colorWithRed:0.0/255.0 green:136.0/255.0 blue:204.0/255.0 alpha:1.0];
+    self.telegramButton.backgroundColor = [UIColor colorWithRed:0.0/255.0 green:136.0/255.0 blue:204.0/255.0 alpha:0.85];
     [self.telegramButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.telegramButton.layer.cornerRadius = 10;
+    self.telegramButton.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    self.telegramButton.layer.cornerRadius = 12;
     [self.telegramButton addTarget:self action:@selector(openTelegram) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.telegramButton];
+    [self.cardContainerView addSubview:self.telegramButton];
     
+    // 10. مؤشر التحميل
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    self.spinner.center = CGPointMake(self.view.bounds.size.width / 2, 420);
+    self.spinner.center = CGPointMake(cardWidth / 2, 375);
     self.spinner.color = [UIColor whiteColor];
-    [self.view addSubview:self.spinner];
+    [self.cardContainerView addSubview:self.spinner];
     
-    // مؤقت الخروج التلقائي بعد 15 ثانية
-    self.autoExitTimer = [NSTimer scheduledTimerWithTimeInterval:15.0
+    // بدء العداد التنازلي (15 ثانية)
+    self.remainingTime = 15.0;
+    self.autoExitTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
                                                      target:self
-                                                   selector:@selector(handleTimeoutExit)
+                                                   selector:@selector(updateCountdownProgress)
                                                    userInfo:nil
-                                                    repeats:NO];
+                                                    repeats:YES];
+}
+
+// زر اللصق السريع
+- (void)pasteFromClipboard {
+    [self triggerHapticFeedback:UIImpactFeedbackStyleLight];
+    NSString *clipboardString = [UIPasteboard generalPasteboard].string;
+    if (clipboardString && clipboardString.length > 0) {
+        self.passcodeTextField.text = [clipboardString stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+}
+
+// تحديث شريط التقدم كل 0.1 ثانية والإنهاء بعد 15 ثانية
+- (void)updateCountdownProgress {
+    self.remainingTime -= 0.1;
+    float progress = MAX(0.0, self.remainingTime / 15.0);
+    [self.timerProgressView setProgress:progress animated:YES];
+    
+    if (self.remainingTime <= 0) {
+        [self.autoExitTimer invalidate];
+        exit(0);
+    }
+}
+
+// تأثير الاهتزاز التفاعلي (Haptic)
+- (void)triggerHapticNotification:(UINotificationFeedbackType)type {
+    if (@available(iOS 10.0, *)) {
+        UINotificationFeedbackGenerator *generator = [[UINotificationFeedbackGenerator alloc] init];
+        [generator prepare];
+        [generator notificationOccurred:type];
+    }
+}
+
+- (void)triggerHapticFeedback:(UIImpactFeedbackStyle)style {
+    if (@available(iOS 10.0, *)) {
+        UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+        [generator prepare];
+        [generator impactOccurred];
+    }
+}
+
+// تأثير اهتزاز حقل النص عند الخطأ (Shake Animation)
+- (void)shakeView:(UIView *)viewToShake {
+    CAKeyframeAnimation *animation = [CAKeyframeAnimation animationWithKeyPath:@"transform.translation.x"];
+    animation.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
+    animation.duration = 0.4;
+    animation.values = @[ @(-10), @(10), @(-8), @(8), @(-4), @(4), @(0) ];
+    [viewToShake.layer addAnimation:animation forKey:@"shake"];
 }
 
 - (void)openTelegram {
+    [self triggerHapticFeedback:UIImpactFeedbackStyleMedium];
     NSURL *telegramURL = [NSURL URLWithString:@"https://telegram.me/LLYDL"];
     [[UIApplication sharedApplication] openURL:telegramURL options:@{} completionHandler:nil];
-}
-
-- (void)handleTimeoutExit {
-    exit(0);
 }
 
 - (void)dealloc {
@@ -239,8 +339,12 @@
 }
 
 - (void)verifyCode {
+    [self triggerHapticFeedback:UIImpactFeedbackStyleMedium];
+    
     NSString *code = [self.passcodeTextField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (code.length == 0) {
+        [self triggerHapticNotification:UINotificationFeedbackTypeError];
+        [self shakeView:self.passcodeTextField];
         self.statusLabel.text = @"يرجى إدخال كود التفعيل أولاً";
         return;
     }
@@ -263,12 +367,16 @@
             self.submitButton.enabled = YES;
             
             if (error || !data) {
+                [self triggerHapticNotification:UINotificationFeedbackTypeError];
+                [self shakeView:self.cardContainerView];
                 self.statusLabel.text = @"تعذر الاتصال بقائمة المفاتيح";
                 return;
             }
             
             NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
             if (httpResponse.statusCode != 200) {
+                [self triggerHapticNotification:UINotificationFeedbackTypeError];
+                [self shakeView:self.cardContainerView];
                 self.statusLabel.text = [NSString stringWithFormat:@"خطأ سيرفر رمز: %ld", (long)httpResponse.statusCode];
                 return;
             }
@@ -276,6 +384,8 @@
             NSError *jsonError;
             id jsonObject = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
             if (jsonError) {
+                [self triggerHapticNotification:UINotificationFeedbackTypeError];
+                [self shakeView:self.cardContainerView];
                 self.statusLabel.text = @"خطأ في قراءة ملف المفاتيح من السيرفر";
                 return;
             }
@@ -315,8 +425,10 @@
             }
             
             if (isValidKey) {
+                // إيقاف العداد فور النجاح وإطلاق اهتزاز التفعيل
                 [self.autoExitTimer invalidate];
                 self.autoExitTimer = nil;
+                [self triggerHapticNotification:UINotificationFeedbackTypeSuccess];
                 
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
                 [[NSUserDefaults standardUserDefaults] setDouble:now forKey:@"AppActivationTimestamp"];
@@ -331,6 +443,8 @@
                     }
                 }];
             } else {
+                [self triggerHapticNotification:UINotificationFeedbackTypeError];
+                [self shakeView:self.passcodeTextField];
                 self.statusLabel.text = @"الكود غير صحيح أو منتهي الصلاحية";
             }
         });
@@ -365,7 +479,6 @@ static void showLockScreenIfNeeded(void) {
                 [rootVC presentViewController:lockVC animated:NO completion:nil];
             } else {
                 [AppLockViewController showSuccessNotificationOnVC:rootVC];
-                // المزامنة الفورية للبيانات في الخلفية لتطبيق تعديلات السيرفر فوراً
                 [AppLockViewController syncSubscriptionWithServer];
             }
         }
