@@ -83,9 +83,11 @@
     
     NSURL *url = [NSURL URLWithString:@"https://a-coral-two-10.vercel.app/api/keys"];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
-                                                            cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData
+                                                            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                         timeoutInterval:10.0];
     [request setHTTPMethod:@"GET"];
+    [request setValue:@"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" forHTTPHeaderField:@"User-Agent"];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
     
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -121,9 +123,7 @@
                         if (k && [k isEqualToString:code]) {
                             isValidKey = YES;
                             double customDays = [item[@"days"] doubleValue];
-                            if (customDays > 0) {
-                                durationDays = customDays;
-                            }
+                            if (customDays > 0) durationDays = customDays;
                             break;
                         }
                     } else if ([item isKindOfClass:[NSString class]] && [item isEqualToString:code]) {
