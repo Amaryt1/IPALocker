@@ -109,7 +109,7 @@
     [self.submitButton addTarget:self action:@selector(verifyCode) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.submitButton];
     
-    // 4. زر التليجرام تحت زر التفعيل
+    // زر التليجرام
     self.telegramButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.telegramButton.frame = CGRectMake(40, 355, self.view.bounds.size.width - 80, 45);
     [self.telegramButton setTitle:@"✈️ الدعم عبر تليجرام" forState:UIControlStateNormal];
@@ -124,8 +124,8 @@
     self.spinner.color = [UIColor whiteColor];
     [self.view addSubview:self.spinner];
     
-    // 3. مؤقت إغلاق التطبيق تلقائياً بعد 5 ثوانٍ عند تأخر إدخال الكود
-    self.autoExitTimer = [NSTimer scheduledTimerWithTimeInterval:5.0
+    // مؤقت إغلاق التطبيق تلقائياً بعد 15 ثانية عند التأخر في إدخال الكود
+    self.autoExitTimer = [NSTimer scheduledTimerWithTimeInterval:15.0
                                                      target:self
                                                    selector:@selector(handleTimeoutExit)
                                                    userInfo:nil
@@ -279,7 +279,6 @@ static void showLockScreenIfNeeded(void) {
 }
 
 static void __attribute__((constructor)) initializeAppLock(void) {
-    // فحص المفتاح عند فتح التطبيق لأول مرة
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
@@ -287,7 +286,6 @@ static void __attribute__((constructor)) initializeAppLock(void) {
         showLockScreenIfNeeded();
     }];
     
-    // 1. إعادة فحص المفتاح والتأكد من الاتصال في كل مرة يدخل فيها المستخدم للتطبيق (حتى من الخلفية)
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
